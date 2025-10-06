@@ -1,0 +1,240 @@
+TYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title> Glider Profile Picture Generator</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Use Inter font -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9; /* Light gray background */
+        }
+        .container-card {
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 5px 15px -5px rgba(0, 0, 0, 0.04);
+        }
+        .loading-spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-top: 4px solid #10b981; /* Emerald green */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <div id="app" class="w-full max-w-lg container-card bg-white p-6 md:p-8 rounded-xl">
+        <h1 class="text-3xl font-extrabold text-gray-900 text-center mb-2">
+            Vector Profile Picture Studio
+        </h1>
+        <p class="text-center text-gray-500 mb-8">
+            Upload your photo to transform it into a 3D vector cartoon with a custom background.
+        </p>
+
+        <!-- Image Upload Section -->
+        <div class="mb-6">
+            <label for="fileInput" class="block text-sm font-medium text-gray-700 mb-2">
+                1. Upload Your Profile Photo (PNG or JPG)
+            </label>
+            <input type="file" id="fileInput" accept="image/png, image/jpeg" class="w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100 rounded-lg border border-gray-300 p-2 transition duration-150">
+        </div>
+
+        <!-- Generation Button -->
+        <button id="generateBtn" onclick="generateImage()" class="w-full flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-xl text-white bg-emerald-600 hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 transition duration-150 shadow-md hover:shadow-lg disabled:bg-gray-400" disabled>
+            <span id="buttonText">2. Generate Your Cartoon PFP</span>
+            <div id="loadingSpinner" class="loading-spinner ml-3 hidden"></div>
+        </button>
+
+        <!-- Status/Error Message -->
+        <div id="message" class="mt-4 p-3 rounded-lg text-sm hidden" role="alert"></div>
+
+        <!-- Result Display Area -->
+        <div id="resultContainer" class="mt-8 pt-6 border-t border-gray-200 hidden">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Your New Profile Picture:</h2>
+            <div class="relative w-full aspect-square bg-gray-100 rounded-xl overflow-hidden shadow-inner">
+                <img id="generatedImage" class="w-full h-full object-cover" src="" alt="Generated 3D Vector Cartoon Image" onerror="this.style.display='none'">
+            </div>
+            
+            <!-- Download Button -->
+            <button id="downloadBtn" onclick="downloadImage()" class="mt-4 w-full flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-xl text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 shadow-md hover:shadow-lg">
+                3. Download Image
+            </button>
+        </div>
+
+    </div>
+
+    <script type="module">
+        // Gemini API Configuration
+        // IMPORTANT: When deploying this file to Vercel or any other hosting, you MUST 
+        // replace the empty string below with your actual Gemini API Key.
+        // NOTE: Putting the key here exposes it to the public, which is generally not recommended
+        // for production apps. For this simple demo, it's the easiest fix.
+        const apiKey = "AIzaSyABo_00dSmYvTl1pZvQvHL0-x_Tmhln-zg"; // <-- REPLACE THIS
+        const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent?key=${apiKey}`;
+
+        // DOM Elements
+        const fileInput = document.getElementById('fileInput');
+        const generateBtn = document.getElementById('generateBtn');
+        const buttonText = document.getElementById('buttonText');
+        const loadingSpinner = document.getElementById('loadingSpinner');
+        const messageElement = document.getElementById('message');
+        const resultContainer = document.getElementById('resultContainer');
+        const generatedImage = document.getElementById('generatedImage');
+        const downloadBtn = document.getElementById('downloadBtn');
+
+        // State
+        let generatedImageUrl = '';
+
+        // --- Utility Functions ---
+
+        /** Converts a File object to a Base64 string. */
+        function fileToBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = () => resolve(reader.result.split(',')[1]); // Only get the Base64 data part
+                reader.onerror = error => reject(error);
+            });
+        }
+
+        /** Handles fetch with exponential backoff for resilience. */
+        async function exponentialBackoffFetch(url, options, retries = 3, delay = 1000) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (response.ok) {
+                        return response;
+                    } else if (response.status === 429 && i < retries - 1) {
+                        // Too many requests, retry
+                        await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+                    } else {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                } catch (error) {
+                    if (i === retries - 1) throw error;
+                    // Other errors, retry
+                    await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, i)));
+                }
+            }
+        }
+
+        /** Displays an error message */
+        function displayMessage(text, isError = false) {
+            messageElement.textContent = text;
+            messageElement.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-green-100', 'text-green-700');
+            if (isError) {
+                messageElement.classList.add('bg-red-100', 'text-red-700');
+            } else {
+                messageElement.classList.add('bg-green-100', 'text-green-700');
+            }
+        }
+
+        // --- Main Logic ---
+
+        fileInput.addEventListener('change', () => {
+            generateBtn.disabled = !fileInput.files[0];
+            // Clear previous results on new file selection
+            resultContainer.classList.add('hidden');
+            generatedImageUrl = '';
+            messageElement.classList.add('hidden');
+        });
+
+        window.generateImage = async function() {
+            const file = fileInput.files[0];
+            if (!file) {
+                displayMessage('Please select a profile picture first.', true);
+                return;
+            }
+
+            // UI State: Loading
+            generateBtn.disabled = true;
+            buttonText.textContent = 'Generating...';
+            loadingSpinner.classList.remove('hidden');
+            messageElement.classList.add('hidden');
+            resultContainer.classList.add('hidden');
+
+            try {
+                // 1. Convert file to Base64
+                const base64Image = await fileToBase64(file);
+
+                // 2. Define the image generation prompt and configuration
+                const userPrompt = "Transform the person in the foreground of this photo into a hyper-realistic 3D vector illustration, in a stylized cartoon aesthetic. The final image MUST have a solid mint green background (use color code #98FFC2) and feature an embossed, subtle black bat logo centered behind the character, matching the style of a superhero logo, integrated smoothly into the background.";
+                
+                const payload = {
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [
+                                { text: userPrompt },
+                                {
+                                    inlineData: {
+                                        mimeType: file.type,
+                                        data: base64Image
+                                    }
+                                }
+                            ]
+                        }
+                    ],
+                    generationConfig: {
+                        responseModalities: ["IMAGE"],
+                    }
+                };
+
+                // 3. Call the Gemini API
+                const response = await exponentialBackoffFetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                const result = await response.json();
+                
+                const base64Data = result?.candidates?.[0]?.content?.parts?.find(p => p.inlineData)?.inlineData?.data;
+
+                if (!base64Data) {
+                    throw new Error("Failed to generate image. Response was empty or structure unexpected.");
+                }
+
+                // 4. Display the generated image
+                generatedImageUrl = `data:image/jpeg;base64,${base64Data}`;
+                generatedImage.src = generatedImageUrl;
+                resultContainer.classList.remove('hidden');
+                displayMessage('Image successfully generated! Lookin\' sharp!', false);
+
+            } catch (error) {
+                console.error("Image generation error:", error);
+                displayMessage(`Error: ${error.message}. Please try a different photo or check the console.`, true);
+            } finally {
+                // UI State: Reset
+                buttonText.textContent = '2. Generate Your Cartoon PFP';
+                loadingSpinner.classList.add('hidden');
+                generateBtn.disabled = false;
+            }
+        };
+
+        window.downloadImage = function() {
+            if (!generatedImageUrl) {
+                displayMessage('Please generate an image first.', true);
+                return;
+            }
+            // Create a temporary link element
+            const link = document.createElement('a');
+            link.href = generatedImageUrl;
+            link.download = 'vector-pfp-' + Date.now() + '.jpeg';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    </script>
+
+</body>
+</html>
